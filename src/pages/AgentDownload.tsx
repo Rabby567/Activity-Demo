@@ -307,7 +307,7 @@ if __name__ == '__main__':
 `,
   'config.json': `{
   "api_key": "${apiKey || 'YOUR_EMPLOYEE_API_KEY_HERE'}",
-  "api_url": "https://pwtejgeeeitbhtpljnzi.supabase.co/functions/v1",
+  "api_url": "${import.meta.env.VITE_SUPABASE_URL}/functions/v1",
   "activity_interval": 30,
   "screenshot_interval": 600,
   "idle_threshold": 300,
