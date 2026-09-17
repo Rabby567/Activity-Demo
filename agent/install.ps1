@@ -1,96 +1,267 @@
-# ActivityTrack Agent - One-time Windows setup
-# Installs dependencies, registers a visible-at-login scheduled task, and starts the agent.
+# ============================================
+# Employee Monitor Agent - One-Click Installer
+# ============================================
+# This script automatically:
+# 1. Checks/installs Python
+# 2. Installs required packages
+# 3. Creates a Windows startup task
+# 4. Launches the agent
+# ============================================
+
 $ErrorActionPreference = "Stop"
 
+# Colors for output
+function Write-Success { param($msg) Write-Host $msg -ForegroundColor Green }
+function Write-Info { param($msg) Write-Host $msg -ForegroundColor Cyan }
+function Write-Warn { param($msg) Write-Host $msg -ForegroundColor Yellow }
+function Write-Err { param($msg) Write-Host $msg -ForegroundColor Red }
+
+# Get script directory
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
-$taskName = "ActivityTrack Employee Agent"
-$agentScript = Join-Path $scriptDir "employee_agent.py"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " ActivityTrack Agent - One-time Setup" -ForegroundColor Cyan
+Write-Host "  Employee Monitor Agent - One-Click Setup" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Find Python
-$python = $null
-foreach ($candidate in @("py", "python", "python3")) {
+# Step 1: Check/Install Python
+Write-Info "[Step 1/4] Checking Python installation..."
+
+$pythonCmd = $null
+$pythonPaths = @("python", "python3", "py")
+
+foreach ($cmd in $pythonPaths) {
     try {
-        $cmd = Get-Command $candidate -ErrorAction Stop
-        $python = $cmd.Source
-        break
+        $version = & $cmd --version 2>&1
+        if ($version -match "Python 3\.(\d+)") {
+            $minorVersion = [int]$Matches[1]
+            if ($minorVersion -ge 8) {
+                $pythonCmd = $cmd
+                Write-Success "  Found: $version"
+                break
+            }
+        }
     } catch {}
 }
-if (-not $python) {
-    Write-Host "Python 3.8+ is required. Install Python and enable Add to PATH, then run setup again." -ForegroundColor Red
-    Read-Host "Press Enter to close"
+
+if (-not $pythonCmd) {
+    Write-Warn "  Python 3.8+ not found. Installing Python..."
+    
+    # Check if winget is available
+    $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
+    
+    if ($hasWinget) {
+        Write-Info "  Installing Python via winget..."
+        winget install Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
+        
+        # Refresh PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        
+        # Wait for installation
+        Start-Sleep -Seconds 5
+        $pythonCmd = "python"
+    } else {
+        # Download Python installer directly
+        Write-Info "  Downloading Python installer..."
+        $pythonUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+        $installerPath = "$env:TEMP\python-installer.exe"
+        
+        try {
+            Invoke-WebRequest -Uri $pythonUrl -OutFile $installerPath -UseBasicParsing
+            
+            Write-Info "  Running Python installer (this may take a few minutes)..."
+            Start-Process -FilePath $installerPath -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0" -Wait
+            
+            # Refresh PATH
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            
+            Remove-Item $installerPath -ErrorAction SilentlyContinue
+            $pythonCmd = "python"
+            
+            Write-Success "  Python installed successfully!"
+        } catch {
+            Write-Err "  Failed to install Python automatically."
+            Write-Err "  Please install Python 3.8+ manually from https://python.org"
+            Write-Host ""
+            Write-Host "Press any key to exit..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            exit 1
+        }
+    }
+    
+    # Verify installation
+    try {
+        $version = & $pythonCmd --version 2>&1
+        Write-Success "  Installed: $version"
+    } catch {
+        Write-Err "  Python installation failed. Please install manually."
+        Write-Host "Press any key to exit..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 1
+    }
+}
+
+# Step 2: Install Python packages
+Write-Host ""
+Write-Info "[Step 2/4] Installing Python packages..."
+
+try {
+    # First upgrade pip
+    Write-Info "  Upgrading pip..."
+    & $pythonCmd -m pip install --upgrade pip 2>&1 | Out-Null
+    
+    # Install packages with visible output
+    Write-Info "  Installing dependencies (this may take a minute)..."
+    $pipResult = & $pythonCmd -m pip install -r requirements.txt 2>&1
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "  Package installation failed!"
+        Write-Err "  Error details:"
+        $pipResult | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        throw "pip install failed"
+    }
+    
+    Write-Success "  All packages installed successfully!"
+} catch {
+    Write-Err "  Failed to install packages"
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Host "  Troubleshooting Tips:" -ForegroundColor Red
+    Write-Host "============================================" -ForegroundColor Red
+    Write-Warn "  1. Try running as Administrator"
+    Write-Warn "  2. Check your internet connection"
+    Write-Warn "  3. If error persists, try: pip install pywin32 pynput Pillow pystray psutil requests"
+    Write-Host ""
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
-Write-Host "[1/4] Installing agent dependencies..." -ForegroundColor Cyan
-& $python -m pip install -r (Join-Path $scriptDir "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+# Step 3: Verify config.json
+Write-Host ""
+Write-Info "[Step 3/4] Checking configuration..."
 
 $configPath = Join-Path $scriptDir "config.json"
-if (-not (Test-Path $configPath)) { throw "config.json was not found." }
-
-# Prefer pythonw.exe so no console window appears.
-$pythonExe = $python
-if ($pythonExe -match "python.exe$") {
-    $pythonw = $pythonExe -replace "python.exe$", "pythonw.exe"
+if (Test-Path $configPath) {
+    $config = Get-Content $configPath | ConvertFrom-Json
+    if ($config.api_key -eq "YOUR_EMPLOYEE_API_KEY_HERE") {
+        Write-Warn "  Warning: API key not configured!"
+        Write-Warn "  Please edit config.json and add the employee's API key."
+    } else {
+        Write-Success "  Configuration found with API key set!"
+    }
 } else {
-    $pythonw = $null
-}
-if (-not $pythonw -or -not (Test-Path $pythonw)) {
-    $pythonw = $pythonExe
-}
-
-Write-Host "[2/4] Registering automatic startup..." -ForegroundColor Cyan
-
-# Remove an older task with either name.
-foreach ($oldName in @("EmployeeMonitorAgent", $taskName)) {
-    try {
-        Unregister-ScheduledTask -TaskName $oldName -Confirm:$false -ErrorAction SilentlyContinue
-    } catch {}
+    Write-Err "  config.json not found!"
+    Write-Host "Press any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 1
 }
 
-$action = New-ScheduledTaskAction `
-    -Execute $pythonw `
-    -Argument "`"$agentScript`"" `
-    -WorkingDirectory $scriptDir
-
-# Starts after the employee signs into Windows. It remains visible in the system tray.
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-
-$settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
-
-$principal = New-ScheduledTaskPrincipal `
-    -UserId $env:USERNAME `
-    -LogonType Interactive `
-    -RunLevel Limited
-
-Register-ScheduledTask `
-    -TaskName $taskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Principal $principal `
-    -Description "ActivityTrack employee agent. Visible system-tray application; starts at Windows login." `
-    -Force | Out-Null
-
-Write-Host "[3/4] Starting the agent now..." -ForegroundColor Cyan
-Start-ScheduledTask -TaskName $taskName
-
-Write-Host "[4/4] Completed." -ForegroundColor Green
+# Step 4: Install agent to a stable per-user location and create auto-start task
 Write-Host ""
-Write-Host "The agent will now start automatically whenever this Windows user logs in." -ForegroundColor Green
-Write-Host "Look for the ActivityTrack icon in the system tray." -ForegroundColor Green
-Write-Host "You do not need to run employee_agent.py again." -ForegroundColor Green
+Write-Info "[Step 4/4] Installing background auto-start..."
+
+$taskName = "EmployeeMonitorAgent"
+$stableDir = Join-Path $env:LOCALAPPDATA "ActivityTrackAgent"
+
+# Copy the complete agent to a stable location.
+# This prevents the agent from breaking when the downloaded ZIP/folder is moved or deleted.
+if ($scriptDir.TrimEnd('\') -ne $stableDir.TrimEnd('\')) {
+    if (Test-Path $stableDir) {
+        Remove-Item $stableDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $stableDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $scriptDir "*") -Destination $stableDir -Recurse -Force
+}
+
+$stableAgentScript = Join-Path $stableDir "employee_agent.py"
+$stableConfig = Join-Path $stableDir "config.json"
+
+if (-not (Test-Path $stableAgentScript) -or -not (Test-Path $stableConfig)) {
+    Write-Err "  Failed to copy agent files to $stableDir"
+    exit 1
+}
+
+# Resolve python.exe and pythonw.exe
+$pythonPath = (Get-Command $pythonCmd -ErrorAction SilentlyContinue).Source
+if (-not $pythonPath) {
+    $pythonPath = $pythonCmd
+}
+$pythonwPath = $pythonPath -replace "python\.exe$", "pythonw.exe"
+if (-not (Test-Path $pythonwPath)) {
+    $pythonwPath = $pythonPath
+}
+
+# Remove old task if present
+Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+
+try {
+    # Run silently in the background after the current Windows user logs in.
+    $action = New-ScheduledTaskAction `
+        -Execute $pythonwPath `
+        -Argument "`"$stableAgentScript`"" `
+        -WorkingDirectory $stableDir
+
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+
+    # Restart automatically if the agent crashes.
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 999 `
+        -RestartInterval (New-TimeSpan -Minutes 1)
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $env:USERNAME `
+        -LogonType Interactive `
+        -RunLevel Limited
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Principal $principal `
+        -Description "ActivityTrack employee agent background startup" | Out-Null
+
+    Write-Success "  Background auto-start task created successfully!"
+    Write-Success "  Stable agent location: $stableDir"
+} catch {
+    Write-Err "  Could not create Windows Scheduled Task."
+    Write-Err "  $($_.Exception.Message)"
+    exit 1
+}
+
+# Stop any old agent process launched from the downloaded folder.
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -match "pythonw?\.exe" -and
+        $_.CommandLine -match "employee_agent\.py"
+    } |
+    ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+    }
+
+# Launch the stable copy silently now.
 Write-Host ""
-Read-Host "Press Enter to close"
+Write-Host "============================================" -ForegroundColor Green
+Write-Host "  Installation Complete!" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+Write-Host ""
+Write-Info "Launching background agent..."
+Start-Process -FilePath $pythonwPath `
+    -ArgumentList "`"$stableAgentScript`"" `
+    -WorkingDirectory $stableDir `
+    -WindowStyle Hidden
+
+Write-Success "Agent is running in the background/system tray."
+Write-Host ""
+Write-Host "The agent will start automatically after every Windows login."
+Write-Host "It will continue after this setup window is closed."
+Write-Host "It will restart automatically if it crashes."
+Write-Host ""
+Write-Host "Press any key to close this window..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

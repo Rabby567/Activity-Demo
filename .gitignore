@@ -22,23 +22,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-# Environment files
-.env
-.env.*
-!.env.example
-
-# Dependencies and builds
-node_modules/
-dist/
-release/
-
-# Python cache
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Logs
-*.log
-logs/

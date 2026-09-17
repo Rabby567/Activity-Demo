@@ -77,17 +77,6 @@ This is by design - the agent is protected and requires admin approval to close.
 For support, contact your IT administrator.
 
 
-## Automatic background operation
+## Background startup behavior
 
-Run `setup.bat` only once. The installer:
-
-- Installs Python dependencies.
-- Registers a Windows Scheduled Task named `ActivityTrack Employee Agent`.
-- Starts the agent immediately using `pythonw.exe` when available.
-- Starts the visible system-tray agent automatically after every Windows login.
-- Configures limited automatic restart after an unexpected crash.
-
-You do not need to run `employee_agent.py` manually again.
-
-The agent remains visible in the system tray. To remove automatic startup, run
-`remove-autostart.ps1`. This does not delete the agent files.
+The setup copies the agent to `%LOCALAPPDATA%\ActivityTrackAgent`, runs it with `pythonw.exe`, and creates a Windows Scheduled Task named `EmployeeMonitorAgent` that starts at user logon and restarts after crashes. Closing the setup window does not stop the agent. Windows must be logged in for the tray agent to run.
